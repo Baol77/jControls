@@ -1,0 +1,402 @@
+(function ($) {
+    // PROPERTIES:
+    //  jsonUrl (string): url to a json source
+    //  multiSelect (boolean [false]) : possibility to select more nodes
+    //---------------------------------------------------------
+    // EVENTS:
+    //      :function (event, ui)
+    //          - event: DOM event (not always present
+    //          - ui: event arguments (node always present)
+    //              - node.id, node.text, node.level, node.attributes[], node.setCSS(propertyName,value
+    //
+    //      onNodeAdded
+    //      onAfterLoad
+    //      onBeforeNodeClick
+    //          - ui.cancel (boolean [false])
+    //      onAfterNodeClick
+    //-----------------------------------------------------------------------------------
+    //  METHODS:
+    //      getParentNode(id) : node
+    //      getSelectedNodes(): node[]
+    //      isLoaded(): boolean
+    //      minimize(): jTree
+    //      openSelectedNodesPath(): jTree
+    //      selectNodeById(id): jTree
+    //      selectNodeByValue(val): jTree
+    //      unselectAll(): jTree
+    // ------------------------------------------
+
+    // ------------------------------------------
+    // --------  Options ------------------------
+    //-------------------------------------------
+    var defaults = {
+        multiSelect: false
+    };
+    var attrPrefix = "attr-";
+
+    // ------------------------------------------
+    // --------  Public Methods  ----------------
+    // ------------------------------------------
+    var methods = {
+
+        init: function (options) {
+
+            var opts = $.extend({}, defaults, options);
+
+            return this.each(function () {
+
+                var $this = $(this);
+
+                // Store global variables
+                $this.data("jTree", {
+                    multiSelect: opts.multiSelect,
+                    isLoaded: true
+                });
+
+                // Add waiting message
+                $this.empty().html('<img src="../Images/ajax-loader.gif" /> Loading data...');
+
+                // Get data from JSON remote source
+                $.getJSON(opts.jsonUrl, function (data) {
+
+                    // Remove the waiting message after data loading
+                    $this.empty();
+
+                    // Create root element
+                    var ul = document.createElement("ul");
+                    ul.className = "tree";
+
+                    // Create children
+                    for (var i in data.RootNodes) {
+                        var rootNode = data.RootNodes[i];
+                        var isLastNode = (i == data.RootNodes.length - 1);
+                        var li = parseNode(opts, rootNode, isLastNode);
+                        if (li != null)
+                            ul.appendChild(li);
+                    }
+
+                    // Append tree to DOM
+                    $this.get(0).appendChild(ul);
+
+                    // Attach behaviors
+                    addCollapseExpand($this);
+                    addSelectivity($this, opts);
+                })
+                .success(function () {
+                    // Bind 'onAfterLoad' if defined
+                    if (opts.onAfterLoad !== undefined) {
+                        var event;
+                        var ui = {};
+                        ui.target = $this;
+                        opts.onAfterLoad(event, ui);
+                    }
+                })
+                .error(function () { alert("error while generating the tree."); })
+                .complete(function () { });
+            });
+        },
+        getParentNode: function (id) {
+
+            var $this = this;
+            var $li = $this.find("li[nodeId=" + id + "]");
+            var $parent_li = $li.parent().closest("li");
+
+            var parentNode = {};
+            if ($parent_li.length > 0) {
+                parentNode = getNodeFromListItem($parent_li);
+            }
+
+            return parentNode;
+        },
+        getSelectedNodes: function () {
+
+            var $this = this;
+            var selectedNodes = [];
+
+            $this.find("span.selected").each(function () {
+
+                var $span = $(this);
+                var $li = $span.parent();
+                var node = getNodeFromListItem($li);
+                selectedNodes.push(node);
+
+            });
+
+            return selectedNodes;
+        },
+        isLoaded: function () {
+
+            var isLoaded = false;
+            this.each(function () {
+                var $this = $(this);
+                isLoaded = isLoaded || ($this.data("jTree") !== undefined && $this.data("jTree").isLoaded === true);
+            });
+
+            return isLoaded;
+        },
+        minimize: function () {
+
+            return this.each(function () {
+                var $this = $(this);
+                $this.find("ul:first > li").each(function () {
+                    var $li = $(this);
+                    hideNode($li);
+                });
+
+                return $this;
+            });
+
+        },
+        openSelectedNodesPath: function () {
+
+            return this.each(function () {
+                var $this = $(this);
+                $("span.selected", $this).parents("li:gt(0)").each(function () {
+                    var $li = $(this);
+                    showNode($li);
+                });
+
+                return $this;
+            });
+
+        },
+        selectNodeById: function (id) {
+
+            return this.each(function () {
+                var $this = $(this);
+
+                if (!isMultiSelect($this)) {
+                    $(".tree li span", $this).removeClass("selected");
+                }
+
+                $this.find("li[nodeId=" + id + "]  > span").addClass("selected");
+
+                return $this;
+            });
+
+        },
+        selectNodeByValue: function (value) {
+
+            return this.each(function () {
+                var $this = $(this);
+
+                if (!isMultiSelect($this)) {
+                    $(".tree li span", $this).removeClass("selected");
+                }
+
+                $this.find("li span").filter(function () {
+                    return $(this).text() == value;
+                }).addClass("selected");
+
+                return $this;
+            });
+
+        },
+        unselectAll: function () {
+
+            return this.each(function () {
+                var $this = $(this);
+                $(".tree li span", $this).removeClass("selected");
+
+                return $this;
+            });
+
+        }
+    };
+
+    $.fn.jTree = function (method) {
+
+        // Method calling logic
+        if (methods[method]) {
+            return methods[method].apply(this, Array.prototype.slice.call(arguments, 1));
+        } else if (typeof method === 'object' || !method) {
+            return methods.init.apply(this, arguments);
+        } else {
+            $.error('Method ' + method + ' does not exist on jQuery.tooltip');
+        }
+
+    };
+
+    // ------------------------------------------
+    // --------  Private Methods  ----------------
+    // ------------------------------------------
+
+    function showNode($li) {
+        if ($li.hasClass("lastExpandable")) {
+            $li.removeClass("lastExpandable").addClass("lastCollapsable").children("ul").show();
+            $li.children("div:first").addClass("lastCollapsable-node");
+        }
+        else if ($li.hasClass("expandable")) {
+            $li.removeClass("expandable").addClass("collapsable").children("ul").show();
+            $li.children("div:first").removeClass("expandable-node");
+        }
+    }
+
+    function hideNode($li) {
+        if ($li.hasClass("collapsable")) {
+            $li.removeClass("collapsable").addClass("expandable").children("ul").hide();
+            $li.children("div:first").addClass("expandable-node");
+        }
+        else if ($li.hasClass("lastCollapsable")) {
+            $li.removeClass("lastCollapsable").addClass("lastExpandable").children("ul").hide();
+            $li.children("div:first").addClass("lastExpandable-node");
+        }
+    }
+
+    function addCollapseExpand($this) {
+        $(".tree li div.node", $this).click(function () {
+            var $li = $(this).parent();
+            if ($li.children("ul").is(":visible")) {
+                hideNode($li);
+            }
+            else {
+                showNode($li);
+            }
+        });
+    }
+
+    function isMultiSelect($this) {
+        return $this.data("jTree").multiSelect === true;
+    }
+
+    function addSelectivity($this, opts) {
+
+        var getUi = function ($span, isUnselect) {
+            // Get node entity
+            var $li = $span.parent();
+            var node = getNodeFromListItem($li);
+
+            // Create ui parameters
+            var ui = {};
+            ui.node = node;
+            ui.isUnselect = isUnselect;
+            ui.target = $li;
+
+            return ui;
+        }
+
+        $(".tree li span", $this).click(function (domEvent) {
+
+            var $span = $(this);
+            var isUnselect = $span.hasClass("selected");
+
+            // Bind 'onBeforeNodeClick' if defined
+            if (opts.onBeforeNodeClick !== undefined) {
+
+                var event = domEvent;
+                var ui = getUi($span, isUnselect);
+
+                opts.onBeforeNodeClick(event, ui);
+
+                if (ui.cancel)
+                    return;
+            }
+
+            if (isUnselect) {
+                $span.removeClass("selected");
+            }
+            else {
+
+                if (!isMultiSelect($this))
+                    $(".tree li span", $this).removeClass("selected");
+
+                $span.addClass("selected");
+            }
+
+            // Bind 'onAfterNodeClick' if defined
+            if (opts.onAfterNodeClick !== undefined) {
+
+                var event = domEvent;
+                var ui = getUi($span);
+
+                opts.onAfterNodeClick(event, ui);
+            }
+
+        });
+    }
+
+    function parseNode(opts, node, isLastNode) {
+
+        var li = document.createElement("li");
+        li.setAttribute("nodeLevel", node.Level);
+        li.setAttribute("nodeId", node.Id);
+
+        for (var attribute in node.Attributes) {
+            li.setAttribute(attrPrefix + attribute, node.Attributes[attribute]);
+        }
+
+        // Text info (node.text)
+        var textDiv = document.createElement("span");
+        textDiv.innerHTML = node.Text;
+
+        if (node.Children && node.Children.length > 0) {
+            li.className = isLastNode ? "expandable lastExpandable" : "expandable";
+
+            var divNode = document.createElement("div");
+            divNode.className = isLastNode ? "node lastExpandable-node" : "node expandable-node";
+            li.appendChild(divNode);
+        } else {
+            if (isLastNode)
+                li.className = "last";
+        }
+
+        li.appendChild(textDiv);
+
+        if (node.Children && node.Children.length > 0)
+            li.appendChild(parseNodes(opts, node.Children));
+
+        return li;
+    }
+
+    function parseNodes(opts, nodes) {
+
+        var ul = document.createElement("ul");
+        ul.style["display"] = "none";
+
+        for (var i = 0; i < nodes.length; i++) {
+            var isLastNode = (i == nodes.length - 1);
+            var li = parseNode(opts, nodes[i], isLastNode);
+            if (li != null) {
+                ul.appendChild(li);
+
+                // Bind 'onNodeAdded' if defined
+                if (opts.onNodeAdded !== undefined) {
+
+                    // Get node entity
+                    var $li = $(li);
+                    var node = getNodeFromListItem($li);
+
+                    // Create ui parameters
+                    var ui = {};
+                    ui.node = node;
+
+                    opts.onNodeAdded(event, ui);
+                }
+            }
+        }
+
+        return ul;
+    }
+
+    function getNodeFromListItem($li) {
+
+        var node = {
+            text: $li.children("span").text(),
+            level: $li.attr("nodeLevel"),
+            id: $li.attr("nodeId"),
+            attributes: {},
+            setCSS: function (propertyName, value) {
+                $li.children("span").css(propertyName, value);
+                return $li;
+            }
+        };
+
+        $.each($li[0].attributes, function (index, attr) {
+            if (attr.name.substring(0, attrPrefix.length) == attrPrefix)
+                node.attributes[attr.name.substring(attrPrefix.length)] = attr.value;
+        });
+
+        return node;
+    }
+
+})(jQuery);
